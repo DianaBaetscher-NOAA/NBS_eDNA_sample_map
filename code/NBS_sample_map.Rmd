@@ -1,0 +1,181 @@
+---
+title: "NOAA-AFSC-NBS-sample-map"
+author: "Kimberly Ledger"
+date: "2024-02-14"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+load libraries
+```{r}
+library(tidyverse)
+#library(RColorBrewer)
+#library(ggOceanMaps)
+#library(ggspatial)
+```
+
+get data - i'm pretty sure eDNA samples were taken along with the CTD casts, so i'll extract the location information from those
+```{r}
+#eDNA samples
+samples <- read.csv("~/NBS_eDNA_sample_map/data/NBS_eDNA_extracts_as_of_20240214.csv") %>%
+  filter(sample_type == "sample") #for this i just care about samples, not any of the extraction blanks or field blanks
+
+#NBS2021 event data
+nw2101 <- read.csv("~/NBS_eDNA_sample_map/data/NBS_nbs21_event.csv") %>%
+  filter(GEAR == "CTD") %>%
+  select(SURVEY, STATION, EQ_TIME, EQ_LATITUDE, EQ_LONGITUDE) %>%
+  mutate(SURVEY = as.factor(SURVEY))%>%
+  mutate(STATION = as.factor(STATION))
+
+#NBS2022 event data
+nw2202 <- read.csv("~/NBS_eDNA_sample_map/data/NBS_nw2202_event.csv") %>%
+  filter(GEAR == "CTD") %>%
+  select(SURVEY, STATION, EQ_TIME, EQ_LATITUDE, EQ_LONGITUDE) %>%
+  mutate(SURVEY = as.factor(SURVEY))%>%
+  mutate(STATION = as.factor(STATION))
+
+#NBS2023 event data
+nw2301 <- read.csv("~/NBS_eDNA_sample_map/data/NBS_nw2301_event.csv") %>%
+  filter(GEAR == "CTD") %>%
+  select(SURVEY, STATION, EQ_TIME, EQ_LATITUDE, EQ_LONGITUDE) %>%
+  mutate(SURVEY = as.factor(SURVEY))%>%
+  mutate(STATION = as.factor(STATION))
+
+#looks like the stationID is missing from CTD 5 so i'll fix that manually 
+nw2301[44,2] <- 5
+```
+
+to join location data to eDNA samples, add a column to samples with the survey ID 
+```{r}
+samples <- samples %>%
+  mutate(SURVEY = ifelse(collection_year == "2021", 202101, "NA"),
+         SURVEY = ifelse(collection_year == "2022", 202202, SURVEY),
+         SURVEY = ifelse(collection_year == "2023", 202301, SURVEY)) %>%
+  rename(STATION = location1) %>%
+  select(extraction_ID, collection_year, STATION, depth, SURVEY)  ## clean up the df to make it easier to look at.. 
+
+samples$SURVEY <- as.factor(samples$SURVEY)
+samples$STATION <- as.factor(samples$STATION)
+samples$collection_year <- as.factor(samples$collection_year)
+samples$depth <- as.character(samples$depth)
+```
+
+missing lat/long from st43 in 2023
+```{r}
+st43_nw2301 <- read.csv("~/NBS_eDNA_sample_map/data/NBS_nw2301_event.csv") %>%
+  filter(GEAR == "Bongo") %>%
+  filter(STATION == 43) %>%
+  select(SURVEY, STATION, EQ_TIME, EQ_LATITUDE, EQ_LONGITUDE) %>%
+  mutate(SURVEY = as.factor(SURVEY)) %>%
+  mutate(STATION = as.factor(STATION))
+```
+
+
+also add in the SBS samples 
+```{r}
+#SBS2022 - DY22 event data 
+DY22 <- read.csv("~/NBS_eDNA_sample_map/data/DY22-08Event.csv") %>%
+  filter(SampleYear == "2022") %>%
+  filter(CruiseID == "8DY22") %>%
+  dplyr::select(CruiseID, StationNumber, EQ.Latitude, EQ.Longitude) %>%
+  rename(SURVEY = CruiseID) %>%
+  rename(STATION = StationNumber) %>%
+  rename(EQ_LATITUDE = EQ.Latitude) %>%
+  rename(EQ_LONGITUDE = EQ.Longitude) %>%
+  mutate(STATION = as.factor(STATION)) %>%
+  mutate(SURVEY = as.factor(SURVEY))
+
+#SBS eDNA samples 
+SBS_samples <- read.csv("~/NBS_eDNA_sample_map/data/SBS_eDNA_extracts_as_of_20240215.csv") %>%
+  filter(sample_type == "sample") %>% #for this i just care about samples, not any of the extraction blanks or field blanks
+  mutate(SURVEY = ifelse(location3 == "PAN21", "PAN21", "8DY22")) %>%
+  mutate(collection_year = ifelse(SURVEY == "8DY22", 2022, collection_year)) %>%
+  mutate(collection_year = as.factor(collection_year)) %>%
+  mutate(depth = as.character(depth)) %>%
+  select(extraction_ID, collection_year, location1, depth, SURVEY, longitude, latitude) %>% ## clean up the df to make it easier to look at.. 
+  rename(STATION = location1) %>%
+  mutate(STATION = as.factor(STATION))
+```
+
+
+filter extraction to just keep unique sampling events (i.e. get rid of the three field reps for most samples) 
+and join the lat/long 
+```{r}
+surveys <- nw2101 %>%
+  bind_rows(nw2202) %>%
+  bind_rows(nw2301) %>%
+  bind_rows(st43_nw2301) %>%
+  bind_rows(DY22)
+
+unique_samples <- samples %>%
+  bind_rows(SBS_samples) %>%
+  select(!extraction_ID) %>%
+  unique() %>%
+  left_join(surveys, by = c("SURVEY", "STATION")) %>%
+  mutate(EQ_LATITUDE = ifelse(!is.na(latitude), latitude, EQ_LATITUDE)) %>%
+  mutate(EQ_LONGITUDE = ifelse(!is.na(longitude), longitude, EQ_LONGITUDE)) %>%
+  select(!latitude) %>%
+  select(!longitude)
+
+#unique_samples$collection_year <- as.factor(unique_samples$collection_year)
+unique_samples$EQ_LATITUDE <- as.numeric(unique_samples$EQ_LATITUDE)
+unique_samples$EQ_LONGITUDE <- as.numeric(unique_samples$EQ_LONGITUDE)
+#unique_samples$depth <- as.factor(unique_samples$depth)
+```
+
+make visual of sampling locations
+```{r}
+map_with_sites <- basemap(c(-177, -159, 58, 67), bathymetry = FALSE, rotate = TRUE) + 
+  ggspatial::geom_spatial_point(data = unique_samples, aes(x = EQ_LONGITUDE, y = EQ_LATITUDE, color = collection_year), size = 1) + 
+  labs(color = "Year")
+map_with_sites
+```
+
+try a different plotting package 
+```{r}
+library(rnaturalearth)
+library(rnaturalearthdata)
+world <- ne_countries(scale = "medium", returnclass = "sf")
+```
+
+
+# Cruise Map
+
+```{r,echo=FALSE,warning=FALSE, fig.height= 8, fig.width= 12}
+min_lat <- min(unique_samples$EQ_LATITUDE, na.rm = T)
+max_lat <- max(unique_samples$EQ_LATITUDE, na.rm = T)
+
+min_lon <- min(unique_samples$EQ_LONGITUDE, na.rm = T)
+max_lon <- max(unique_samples$EQ_LONGITUDE, na.rm = T)
+
+unique_samples$collection_year <- as.factor(unique_samples$collection_year)
+
+#bin the 30-60m depth samples to make a figure with fewer grids
+unique_samples <- unique_samples %>%
+  #mutate(depth2 = as.character(depth)) %>%
+  mutate(depth2 = ifelse(depth == 30, "30 to 60", depth),
+         depth2 = ifelse(depth == 40, "30 to 60", depth2),
+         depth2 = ifelse(depth == 50, "30 to 60", depth2),
+         depth2 = ifelse(depth == 60, "30 to 60", depth2))
+
+
+BeringSea_plot <- ggplot(data = world) +
+    geom_sf() +
+    geom_point(data = unique_samples, aes(x = EQ_LONGITUDE, y = EQ_LATITUDE, color= SURVEY)) + 
+  coord_sf(xlim = c(min_lon-2, max_lon+2), ylim = c(min_lat-1, max_lat+1), expand = FALSE) +
+  theme_bw() +xlab("Longitude") +ylab("Latitude") +
+  facet_grid(depth2~collection_year) + 
+  theme(axis.text.x = element_text(angle = 90))
+
+BeringSea_plot
+
+ggsave(plot= BeringSea_plot, 
+      filename = ("~/NBS_eDNA_sample_map/figures/BeringSea_plot.png"),
+      width=12,
+      height = 8,
+      dpi = 300,
+      units = c("in"))
+```
