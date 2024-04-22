@@ -128,10 +128,10 @@ unique_samples$EQ_LONGITUDE <- as.numeric(unique_samples$EQ_LONGITUDE)
 
 make visual of sampling locations
 ```{r}
-map_with_sites <- basemap(c(-177, -159, 58, 67), bathymetry = FALSE, rotate = TRUE) + 
-  ggspatial::geom_spatial_point(data = unique_samples, aes(x = EQ_LONGITUDE, y = EQ_LATITUDE, color = collection_year), size = 1) + 
-  labs(color = "Year")
-map_with_sites
+#map_with_sites <- basemap(c(-177, -159, 58, 67), bathymetry = FALSE, rotate = TRUE) + 
+#  ggspatial::geom_spatial_point(data = unique_samples, aes(x = EQ_LONGITUDE, y = EQ_LATITUDE, color = collection_year), size = 1) + 
+#  labs(color = "Year")
+#map_with_sites
 ```
 
 try a different plotting package 
@@ -172,10 +172,142 @@ BeringSea_plot <- ggplot(data = world) +
 
 BeringSea_plot
 
-ggsave(plot= BeringSea_plot, 
-      filename = ("~/NBS_eDNA_sample_map/figures/BeringSea_plot.png"),
-      width=12,
-      height = 8,
+#ggsave(plot= BeringSea_plot, 
+#      filename = ("~/NBS_eDNA_sample_map/figures/BeringSea_plot.png"),
+#      width=12,
+#      height = 8,
+#      dpi = 300,
+#      units = c("in"))
+```
+
+
+plot a more condensed version 
+```{r}
+BeringSea_plot_by_year <- ggplot(data = world) +
+    geom_sf() +
+    geom_point(data = unique_samples, aes(x = EQ_LONGITUDE, y = EQ_LATITUDE, color= SURVEY)) + 
+  coord_sf(xlim = c(min_lon-2, max_lon+2), ylim = c(min_lat-1, max_lat+1), expand = FALSE) +
+  theme_bw() +xlab("Longitude") +ylab("Latitude") +
+  facet_grid(~collection_year) + 
+  theme(axis.text.x = element_text(angle = 90))
+BeringSea_plot_by_year 
+```
+
+# now let me add it the arctic samples from zach gold's map 
+
+```{r}
+library("readxl")
+library(parzer)
+
+sample_data <- read_excel("~/NBS_eDNA_sample_map/data/Alaska_Arctic_eDNASampleLocations.xlsx")
+ome_data <- read_excel("~/NBS_eDNA_sample_map/data/20240202_OME_Sample_Spreadsheet.xlsx")
+
+sample_data <- sample_data %>% 
+  rename(., Sample_ID="Sample NAME",
+         Cruise ="Cruise/Expedition Name",
+         Site="Site Name",
+         Depth_m="Depth (m)") %>% 
+  mutate(., Lat_deg=parse_lat(Latitude),
+         Lon_deg=parse_lon(Longitude)) %>% 
+  mutate(`Depth_m`=as.numeric(`Depth_m`))
+
+
+ome_data <- ome_data %>% 
+  rename(., Sample_ID="FINAL Sample NAME") %>% 
+  dplyr::select(Sample_ID,Date_utc=`Collection Date (UTC)`,Date_local=`Collection Date (local)`)
+
+
+attr(ome_data$Date_utc, "tzone") <- "UTC"
+attr(ome_data$Date_local, "tzone") <- "US/Alaska"
+
+ome_data %>% 
+  mutate(., Date = if_else(is.na(Date_utc), Date_local, Date_utc)) %>% 
+  dplyr::select(Sample_ID,Date)-> dates_clean
+
+sample_data %>% 
+  left_join(dates_clean) %>% 
+  mutate(., Year = as.numeric(format(Date, format="%Y"))) %>% 
+  mutate(., Date_easy = format(Date, format="%m-%d-%Y")) %>% 
+  mutate(., Month = as.numeric(str_sub(Date_easy,1L,2L)),
+         Season = case_when(Month<4~"Winter",
+                            Month <7~"Spring",
+                            Month <9~"Summer",
+                            Month < 12~"Fall")) %>% 
+  mutate(., Year = case_when(Sample_ID == "E26.1B.DY2012"~ 2020,
+       Sample_ID == "E1953.SKQ23-12S"~ 2023, 
+      Sample_ID == "E1954.SKQ23-12S"~ 2023,
+      Sample_ID == "E1955.SKQ23-12S"~ 2023,
+      TRUE ~Year)) %>% 
+  mutate(., Season = case_when(Sample_ID == "E26.1B.DY2012"~ "Fall",
+       Sample_ID == "E1953.SKQ23-12S"~ "Fall", 
+      Sample_ID == "E1954.SKQ23-12S"~ "Fall",
+      Sample_ID == "E1955.SKQ23-12S"~ "Fall",
+      TRUE ~Season))-> alaska_samples
+```
+
+
+join with my BS samples 
+```{r}
+sample_data <- sample_data %>%
+  mutate(collection_year = ifelse(Cruise == "EcoFOCI Dyson 2020", "2020", NA),
+         collection_year = ifelse(Cruise == "EcoFOCI Norseman 2020", "2020", collection_year),
+         collection_year = ifelse(Cruise == "EcoFOCI Norseman 2020", "2020", collection_year),
+         collection_year = ifelse(Cruise == "SKQ21 EcoFOCI DBO", "2021", collection_year),
+         collection_year = ifelse(Cruise == "EcoFoci Spring Mooring 2022", "2022", collection_year),
+         collection_year = ifelse(Cruise == "EcoFocI Fall Mooring 2022", "2022", collection_year),
+         collection_year = ifelse(Cruise == "EcoFOCI Spring Mooring 2023", "2023", collection_year),
+         collection_year = ifelse(Cruise == "SKQ23 EcoFOCI DBO", "2023", collection_year)) %>%
+  rename(EQ_LONGITUDE = Lon_deg) %>%
+  rename(EQ_LATITUDE = Lat_deg) %>%
+  rename(SURVEY = Cruise) %>%
+  select(EQ_LATITUDE, EQ_LONGITUDE, SURVEY, collection_year)
+
+
+
+all_data <- unique_samples %>%
+  select(EQ_LATITUDE, EQ_LONGITUDE, SURVEY, collection_year) %>% 
+  bind_rows(sample_data)
+```
+
+plot 
+```{r}
+min_lat <- min(all_data$EQ_LATITUDE, na.rm = T)
+max_lat <- max(all_data$EQ_LATITUDE, na.rm = T)
+
+min_lon <- min(all_data$EQ_LONGITUDE, na.rm = T)
+max_lon <- max(all_data$EQ_LONGITUDE, na.rm = T)
+
+all_data$collection_year <- as.factor(all_data$collection_year)
+
+all_data <- all_data %>%
+  filter(collection_year != 2020) %>%
+  filter(SURVEY != "EcoFoci Spring Mooring 2022") %>%
+  filter(SURVEY != "EcoFocI Fall Mooring 2022") %>%
+  filter(SURVEY != "EcoFOCI Spring Mooring 2023") %>%
+  mutate(Location = ifelse(SURVEY == "202101", "NBS", NA), 
+         Location = ifelse(SURVEY == "202202", "NBS", Location),
+         Location = ifelse(SURVEY == "202301", "NBS", Location),
+         Location = ifelse(SURVEY == "8DY22", "SBS", Location),
+         Location = ifelse(SURVEY == "PAN21", "SBS", Location),
+         Location = ifelse(SURVEY == "SKQ21 EcoFOCI DBO", "DBO", Location),
+         Location = ifelse(SURVEY == "SKQ23 EcoFOCI DBO", "DBO", Location))
+  
+plot_by_year <- ggplot(data = world) +
+    geom_sf() +
+    geom_point(data = all_data, aes(x = EQ_LONGITUDE, y = EQ_LATITUDE, color= Location)) + 
+  coord_sf(xlim = c(min_lon-2, max_lon+2), ylim = c(min_lat-1, max_lat+1), expand = FALSE) +
+  theme_bw() +xlab("Longitude") +ylab("Latitude") +
+  facet_grid(~collection_year) + 
+  theme(axis.text.x = element_text(angle = 90))
+plot_by_year 
+```
+
+```{r}
+ggsave(plot= plot_by_year, 
+      filename = ("~/NBS_eDNA_sample_map/figures/DBO_BeringSea_plot.png"),
+      width=8,
+      height = 5,
       dpi = 300,
       units = c("in"))
 ```
+
